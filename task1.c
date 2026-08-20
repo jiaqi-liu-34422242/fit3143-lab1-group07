@@ -1,6 +1,6 @@
 /*
 Jiaqi Liu — 34422242
-Shengyuan Jin — 344172573
+Shengyuan Jin — 34417257
 */
 
 #define _POSIX_C_SOURCE 199309L
@@ -83,10 +83,7 @@ int main()
     printf("Prime search complete - Computational time only(s): %lf\n",
            time_taken);
 
-    /*
-     * Small n: print to standard output
-     * Large n: write to file
-     */
+
     if (n < 100)
     {
         printf("Prime numbers less than %d:\n", n);

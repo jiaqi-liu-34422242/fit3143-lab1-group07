@@ -1,6 +1,6 @@
 /*
 Jiaqi Liu — 34422242
-Shengyuan Jin — 344172573
+Shengyuan Jin — 34417257
 */
 
 #define _POSIX_C_SOURCE 199309L
@@ -15,7 +15,6 @@ int n;
 int numThreads;
 unsigned char *pIsPrime = NULL;
 
-// Function prototypes
 int IsPrime(int number);
 void *ThreadFunc(void *pArg);
 void WriteToFile(char *pFilename, unsigned char *pResult, int n);
@@ -79,7 +78,6 @@ int main()
         return 0;
     }
 
-    // 2 is the only even prime number
     if (n > 2)
     {
         pIsPrime[2] = 1;
@@ -102,9 +100,7 @@ int main()
         }
     }
 
-    // ------------------------------------------------------------
     // Join - Wait until all worker threads finish
-    // ------------------------------------------------------------
     for (i = 0; i < numThreads; i++)
     {
         pthread_join(tid[i], NULL);
@@ -124,9 +120,7 @@ int main()
     printf("Prime search complete - Computational time only(s): %lf\n",
            time_taken);
 
-    // ------------------------------------------------------------
     // Count primes
-    // ------------------------------------------------------------
     for (i = 2; i < n; i++)
     {
         if (pIsPrime[i])
@@ -135,9 +129,7 @@ int main()
         }
     }
 
-    // ------------------------------------------------------------
     // Output
-    // ------------------------------------------------------------
     if (n < 100)
     {
         int first = 1;
@@ -194,9 +186,7 @@ int main()
 }
 
 
-// ------------------------------------------------------------
 // Thread function
-// ------------------------------------------------------------
 void *ThreadFunc(void *pArg)
 {
     int my_rank = *((int *)pArg);
