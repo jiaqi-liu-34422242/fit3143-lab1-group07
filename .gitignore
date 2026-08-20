@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Compiled executables and temporary build output
+task1
+task2
+task3
+*.out
+
+# Generated prime lists can be very large
+primes*.txt
