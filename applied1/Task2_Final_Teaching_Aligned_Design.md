@@ -1,6 +1,6 @@
-# Task 2 — Final Teaching-Aligned MPI Architecture
+# Task 2 — Final Teaching-Aligned Hybrid MPI/OpenMP Architecture
 
-> **Scope.** This is the final Task 2 design. It preserves the three-plane architecture selected in Task 1 while using only MPI calls explicitly introduced in Applied Week 5. It is a proposed simulation architecture; no implementation is claimed.
+> **Scope.** This is the final Task 2 design. It preserves the three-plane architecture selected in Task 1. Inter-process communication uses the Applied Week 5 MPI operations; OpenMP is used only for shared-memory candidate search inside a base-station process. It is a proposed simulation architecture; no implementation is claimed.
 
 ## 1. Design decision
 
@@ -27,7 +27,9 @@ The logical topology is independent of the MPI helper APIs. A 2-D logical mesh d
 | `C_host` | 32 | Physical cores per machine. |
 | `B` | 1 Gbps | External network link rate. |
 
-The baseline is pure MPI: one rank uses one physical core. OpenMP is not required by this teaching-aligned design. It may be investigated later, but would require a separately justified MPI thread-support policy.
+The design is hybrid. Every charging-node rank uses one core. Each base-station rank uses four OpenMP threads to search its own regional status cache in parallel when choosing candidate stations. After this local shared-memory phase, only the base rank's master thread performs MPI communication. The program therefore initialises MPI with `MPI_THREAD_FUNNELED`: multiple threads may exist, but only the thread that initialised MPI calls MPI.
+
+OpenMP changes neither the logical topology nor any business message type. It reduces only the local compute time of the independent regional candidate scans; `STATUS_REPORT`, `QUERY`, `NEIGHBOUR_REPLY`, alert coordination and `REDIRECT` remain MPI communication.
 
 ## 3. Components
 
@@ -75,6 +77,7 @@ classDiagram
       +EventLog log
       +receiveRegionalReports()
       +exchangeAlertBatches()
+      +searchRegionalCacheParallel()
       +findRegionalCandidate()
       +sendRedirect()
     }
@@ -175,7 +178,7 @@ An active decision is the specification's `ALERT`. An inactive decision explicit
 
 ### Phase 0 — initialisation
 
-1. Every process calls `MPI_Init`, `MPI_Comm_rank` and `MPI_Comm_size`.
+1. Every process calls `MPI_Init_thread`, requesting `MPI_THREAD_FUNNELED`, then calls `MPI_Comm_rank` and `MPI_Comm_size`.
 2. Rank 0 validates configuration.
 3. All ranks call `MPI_Bcast` in the same order to receive `CONFIG_BCAST`.
 4. Each node computes its logical coordinate, neighbours and assigned base.
@@ -222,7 +225,7 @@ This provides the required variable-size exchange without `MPI_Allgatherv`.
 
 ### Phase 5 — globally correct candidate selection
 
-For each alert, every base searches only its regional cache. A candidate is eligible when it has at least one free port and its utilisation is at or below the threshold.
+For each alert, every base searches only its regional cache. A candidate is eligible when it has at least one free port and its utilisation is at or below the threshold. At a base station, OpenMP partitions the regional cache into four disjoint chunks. Each worker computes a thread-local best candidate for its chunk; the master thread merges these four candidates deterministically before starting the candidate-vector exchange. No OpenMP worker calls MPI.
 
 Logical distance is:
 
@@ -306,33 +309,34 @@ sequenceDiagram
 7. Every heavy node sends one alert decision, including a negative decision; therefore the base knows exactly when the regional alert phase is complete.
 8. All bases sort alerts identically before candidate exchange.
 9. All ranks call `MPI_Bcast` and `MPI_Barrier` in the same order.
+10. OpenMP workers complete the local candidate search before the master thread sends or receives any candidate batch; only that master thread calls MPI (`MPI_THREAD_FUNNELED`).
 
 ## 9. Machine and core allocation
 
-For the pure-MPI baseline, each charging node and each base uses one rank and one core:
+Each charging-node rank uses one MPI process and one core. Each base uses one MPI process plus four OpenMP threads/cores:
 
 ```text
-totalCores = N + S
-machines_min = ceil((N + S) / C_host)
+totalCores = N × 1 + S × 4
+machines_min = ceil(totalCores / C_host)
 ```
 
 For `N=64`, `S=4` and `C_host=32`:
 
 ```text
-totalCores = 64 + 4 = 68
-machines_min = ceil(68/32) = 3
+totalCores = 64 + 4(4) = 80
+machines_min = ceil(80/32) = 3
 ```
 
 The selected deployment nevertheless uses four hosts, one per region:
 
-| Host | Processes | Active cores | Purpose |
+| Host | Processes and threads | Active cores | Purpose |
 |---|---|---:|---|
-| 0 | base 0 + 16 node ranks | 17 | top-left `4 × 4` region |
-| 1 | base 1 + 16 node ranks | 17 | top-right `4 × 4` region |
-| 2 | base 2 + 16 node ranks | 17 | bottom-left `4 × 4` region |
-| 3 | base 3 + 16 node ranks | 17 | bottom-right `4 × 4` region |
+| 0 | base 0 (4 OpenMP threads) + 16 node ranks | 20 | top-left `4 × 4` region |
+| 1 | base 1 (4 OpenMP threads) + 16 node ranks | 20 | top-right `4 × 4` region |
+| 2 | base 2 (4 OpenMP threads) + 16 node ranks | 20 | bottom-left `4 × 4` region |
+| 3 | base 3 (4 OpenMP threads) + 16 node ranks | 20 | bottom-right `4 × 4` region |
 
-Three machines are the packed mathematical minimum; four machines are the selected locality-aware mapping. The selected mapping keeps node-to-assigned-base traffic within a host and leaves 15 cores per host for runtime and future growth.
+Three machines are the packed mathematical minimum; four machines are the selected locality-aware mapping. The selected mapping keeps node-to-assigned-base traffic within a host and leaves 12 cores per host for runtime and future growth.
 
 ## 10. Required external bandwidth
 
@@ -430,10 +434,9 @@ This is an aggregate offered-load estimate, not a measurement of one physical li
 
 ## 11. Applied Week 5 API compliance
 
-The core design uses only:
+The MPI communication operations used by the core design are:
 
 ```text
-MPI_Init
 MPI_Comm_rank
 MPI_Comm_size
 MPI_Bcast
@@ -447,6 +450,14 @@ MPI_Barrier
 MPI_Wtime
 MPI_Finalize
 ```
+
+The hybrid initialisation additionally uses:
+
+```text
+MPI_Init_thread  (requesting MPI_THREAD_FUNNELED)
+```
+
+This establishes the safe boundary between OpenMP and MPI: OpenMP threads access only the base's local cache, while the master thread alone performs all MPI operations.
 
 If structured payloads are implemented as MPI datatypes, Applied Week 5 also supports:
 
@@ -466,9 +477,8 @@ MPI_Cart_create
 MPI_Cart_shift
 MPI_Allgatherv
 MPI_MINLOC
-MPI_Init_thread
 ```
 
 ## 12. Task 2 conclusion
 
-The design preserves the selected non-periodic logical mesh, regional-star reporting structure and small complete base-control overlay using only MPI facilities introduced in Applied Week 5. Rank arithmetic defines the logical mesh; direct non-blocking operations implement regional and base-to-base exchanges; fixed query records and alert decisions make every communication phase finite; and owner-side comparison produces the globally nearest candidate without `MPI_MINLOC`. The four-host baseline needs only approximately `0.10544 Mbps` of aggregate external bandwidth at one round per second under the stated worst-case workload.
+The design preserves the selected non-periodic logical mesh, regional-star reporting structure and small complete base-control overlay. Rank arithmetic defines the logical mesh; direct non-blocking operations implement regional and base-to-base exchanges; fixed query records and alert decisions make every communication phase finite; and owner-side comparison produces the globally nearest candidate without `MPI_MINLOC`. OpenMP accelerates each base's local regional-candidate search, while `MPI_THREAD_FUNNELED` ensures that only the master thread communicates with other ranks. The four-host baseline uses 80 active cores and needs only approximately `0.10544 Mbps` of aggregate external bandwidth at one round per second under the stated worst-case workload.
